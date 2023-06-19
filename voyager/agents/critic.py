@@ -1,5 +1,7 @@
 from voyager.prompts import load_prompt
 from voyager.utils.json_utils import fix_and_parse_json
+from voyager.memory.base import AgentMemoryBase
+from voyager.memory.utils import get_message_role
 from langchain.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 
@@ -11,6 +13,7 @@ class CriticAgent:
         temperature=0,
         request_timout=120,
         mode="auto",
+        agent_memory=AgentMemoryBase(),
     ):
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -19,6 +22,7 @@ class CriticAgent:
         )
         assert mode in ["auto", "manual"]
         self.mode = mode
+        self.agent_memory = agent_memory
 
     def render_system_message(self):
         system_message = SystemMessage(content=load_prompt("critic"))
@@ -99,6 +103,12 @@ class CriticAgent:
             return False, ""
 
         critic = self.llm(messages).content
+        self.agent_memory.save_messages(
+            f"voyager-critic-agent",
+            f"[{self.llm.model_name}] [Check Task Success]",
+            [m.content for m in messages] + [critic],
+            [get_message_role(m) for m in messages] + ["ai"],
+        )
         print(f"\033[31m****Critic Agent ai message****\n{critic}\033[0m")
         try:
             response = fix_and_parse_json(critic)

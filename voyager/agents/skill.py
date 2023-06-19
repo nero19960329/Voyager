@@ -1,6 +1,8 @@
 import os
 
 import voyager.utils as U
+from voyager.memory.base import AgentMemoryBase
+from voyager.memory.utils import get_message_role
 from langchain.chat_models import ChatOpenAI
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.schema import HumanMessage, SystemMessage
@@ -19,6 +21,7 @@ class SkillManager:
         request_timout=120,
         ckpt_dir="ckpt",
         resume=False,
+        agent_memory=AgentMemoryBase(),
     ):
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -48,6 +51,7 @@ class SkillManager:
             f"Did you set resume=False when initializing the manager?\n"
             f"You may need to manually delete the vectordb directory for running from scratch."
         )
+        self.agent_memory = agent_memory
 
     @property
     def programs(self):
@@ -108,7 +112,14 @@ class SkillManager:
                 + f"The main function is `{program_name}`."
             ),
         ]
-        skill_description = f"    // { self.llm(messages).content}"
+        skill_description = self.llm(messages).content
+        self.agent_memory.save_messages(
+            "voyager-skill-manager",
+            f"[{self.llm.model_name}] [Generate Skill Description]",
+            [m.content for m in messages] + [skill_description],
+            [get_message_role(m) for m in messages] + ["ai"],
+        )
+        skill_description = f"    // { skill_description}"
         return f"async function {program_name}(bot) {{\n{skill_description}\n}}"
 
     def retrieve_skills(self, query):

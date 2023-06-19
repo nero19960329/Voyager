@@ -6,6 +6,8 @@ import re
 import voyager.utils as U
 from voyager.prompts import load_prompt
 from voyager.utils.json_utils import fix_and_parse_json
+from voyager.memory.base import AgentMemoryBase
+from voyager.memory.utils import get_message_role
 from langchain.chat_models import ChatOpenAI
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.schema import HumanMessage, SystemMessage
@@ -25,6 +27,7 @@ class CurriculumAgent:
         mode="auto",
         warm_up=None,
         core_inventory_items: str | None = None,
+        agent_memory=AgentMemoryBase(),
     ):
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -87,6 +90,7 @@ class CurriculumAgent:
         self.warm_up["inventory"] = 0
         self.warm_up["completed_tasks"] = 0
         self.warm_up["failed_tasks"] = 0
+        self.agent_memory = agent_memory
 
     @property
     def default_warmup(self):
@@ -240,7 +244,19 @@ class CurriculumAgent:
     def propose_next_task(self, *, events, chest_observation, max_retries=5):
         if self.progress == 0 and self.mode == "auto":
             task = "Mine 1 wood log"
+            self.agent_memory.save_messages(
+                "voyager-curriculum-agent",
+                "[Human] [Propose Next Task]",
+                [task],
+                ["human"],
+            )
             context = "You can mine one of oak, birch, spruce, jungle, acacia, dark oak, or mangrove logs."
+            self.agent_memory.save_messages(
+                "voyager-curriculum-agent",
+                "[Human] [Answer Question]",
+                [context],
+                ["human"],
+            )
             return task, context
 
         # hard code task when inventory is almost full
@@ -273,6 +289,18 @@ class CurriculumAgent:
             else:
                 task = "Craft 1 chest"
                 context = "Craft 1 chest with 8 planks of any kind of wood."
+            self.agent_memory.save_messages(
+                "voyager-curriculum-agent",
+                "[Human] [Propose Next Task]",
+                [task],
+                ["human"],
+            )
+            self.agent_memory.save_messages(
+                "voyager-curriculum-agent",
+                "[Human] [Answer Question]",
+                [context],
+                ["human"],
+            )
             return task, context
 
         messages = [
@@ -293,6 +321,12 @@ class CurriculumAgent:
         if max_retries == 0:
             raise RuntimeError("Max retries reached, failed to propose ai task.")
         curriculum = self.llm(messages).content
+        self.agent_memory.save_messages(
+            "voyager-curriculum-agent",
+            f"[{self.llm.model_name}] [Propose Next Task]",
+            [m.content for m in messages] + [curriculum],
+            [get_message_role(m) for m in messages] + ["ai"],
+        )
         print(f"\033[31m****Curriculum Agent ai message****\n{curriculum}\033[0m")
         try:
             response = self.parse_ai_message(curriculum)
@@ -378,6 +412,12 @@ class CurriculumAgent:
             f"\033[31m****Curriculum Agent task decomposition****\nFinal task: {task}\033[0m"
         )
         response = self.llm(messages).content
+        self.agent_memory.save_messages(
+            "voyager-curriculum-agent",
+            f"[{self.llm_model_name}] [Decompose Task]",
+            [m.content for m in messages] + [response],
+            [get_message_role(m) for m in messages] + ["ai"],
+        )
         print(f"\033[31m****Curriculum Agent task decomposition****\n{response}\033[0m")
         return fix_and_parse_json(response)
 
@@ -460,6 +500,12 @@ class CurriculumAgent:
             ),
         ]
         qa_response = self.qa_llm(messages).content
+        self.agent_memory.save_messages(
+            "voyager-curriculum-agent",
+            f"[{self.qa_llm.model_name}] [QA: Ask Question]",
+            [m.content for m in messages] + [qa_response],
+            [get_message_role(m) for m in messages] + ["ai"],
+        )
         try:
             # Regex pattern to extract question and concept pairs
             pattern = r"Question \d+: (.+)\nConcept \d+: (.+)"
@@ -494,5 +540,11 @@ class CurriculumAgent:
         ]
         print(f"\033[35mCurriculum Agent Question: {question}\033[0m")
         qa_answer = self.qa_llm(messages).content
+        self.agent_memory.save_messages(
+            "voyager-curriculum-agent",
+            f"[{self.qa_llm.model_name}] [QA: Answer Question]",
+            [m.content for m in messages] + [qa_answer],
+            [get_message_role(m) for m in messages] + ["ai"],
+        )
         print(f"\033[31mCurriculum Agent {qa_answer}\033[0m")
         return qa_answer

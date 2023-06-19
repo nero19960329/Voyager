@@ -12,6 +12,9 @@ from .agents import CriticAgent
 from .agents import CurriculumAgent
 from .agents import SkillManager
 
+from .memory import AgentMemoryMode, get_agent_memory
+from .memory.utils import get_message_role
+
 
 # TODO: remove event memory
 class Voyager:
@@ -47,6 +50,7 @@ class Voyager:
         openai_api_request_timeout: int = 240,
         ckpt_dir: str = "ckpt",
         skill_library_dir: str = None,
+        agent_memory_mode: AgentMemoryMode = AgentMemoryMode.AGENT_MEMORY_MODE_NONE,
         resume: bool = False,
     ):
         """
@@ -98,6 +102,7 @@ class Voyager:
         :param openai_api_request_timeout: how many seconds to wait for openai api
         :param ckpt_dir: checkpoint dir
         :param skill_library_dir: skill library dir
+        :param agent_memory_mode: agent chat memory mode
         :param resume: whether to resume from checkpoint
         """
         # init env
@@ -115,6 +120,10 @@ class Voyager:
         os.environ["OPENAI_API_KEY"] = openai_api_key
 
         # init agents
+        self.agent_memory = get_agent_memory(
+            agent_memory_mode,
+            memory_path=os.path.join(ckpt_dir, "agent_memory"),
+        )
         self.action_agent = ActionAgent(
             model_name=action_agent_model_name,
             temperature=action_agent_temperature,
@@ -136,12 +145,14 @@ class Voyager:
             mode=curriculum_agent_mode,
             warm_up=curriculum_agent_warm_up,
             core_inventory_items=curriculum_agent_core_inventory_items,
+            agent_memory=self.agent_memory,
         )
         self.critic_agent = CriticAgent(
             model_name=critic_agent_model_name,
             temperature=critic_agent_temperature,
             request_timout=openai_api_request_timeout,
             mode=critic_agent_mode,
+            agent_memory=self.agent_memory,
         )
         self.skill_manager = SkillManager(
             model_name=skill_manager_model_name,
@@ -150,6 +161,7 @@ class Voyager:
             request_timout=openai_api_request_timeout,
             ckpt_dir=skill_library_dir if skill_library_dir else ckpt_dir,
             resume=True if resume or skill_library_dir else False,
+            agent_memory=self.agent_memory,
         )
         self.recorder = U.EventRecorder(ckpt_dir=ckpt_dir, resume=resume)
         self.resume = resume
@@ -204,6 +216,12 @@ class Voyager:
         if self.action_agent_rollout_num_iter < 0:
             raise ValueError("Agent must be reset before stepping")
         ai_message = self.action_agent.llm(self.messages)
+        self.agent_memory.save_messages(
+            f"voyager-action-agent",
+            f"[ITER {self.recorder.iteration}] [{self.action_agent.llm.model_name}] [Generate Code]",
+            [m.content for m in self.messages] + [ai_message.content],
+            [get_message_role(m) for m in self.messages] + ["ai"],
+        )
         print(f"\033[34m****Action Agent ai message****\n{ai_message.content}\033[0m")
         self.conversations.append(
             (self.messages[0].content, self.messages[1].content, ai_message.content)
